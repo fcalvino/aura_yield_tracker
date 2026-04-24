@@ -1,0 +1,19 @@
+# ============================================================
+# AuraYieldTracker • Stables Base
+# requirements.txt — Streamlit Community Cloud
+# ============================================================
+
+# Core framework
+streamlit>=1.32.0
+
+# Data processing
+pandas>=2.1.0
+
+# Visualizations
+plotly>=5.18.0
+
+# HTTP client (API calls to DeFiLlama)
+requests>=2.31.0
+
+# Timezone handling
+pytz>=2024.1

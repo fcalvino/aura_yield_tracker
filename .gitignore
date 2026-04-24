@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Streamlit secrets (NUNCA subir a GitHub)
+.streamlit/secrets.toml
+
+# macOS
+.DS_Store
+
+# Outputs locales
+output/
+
+# IDEs
+.vscode/
+.idea/

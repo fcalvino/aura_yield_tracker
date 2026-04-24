@@ -1,0 +1,27 @@
+# ============================================================
+# .streamlit/config.toml
+# AuraYieldTracker — configuración para Streamlit Community Cloud
+# ============================================================
+
+[theme]
+# Tema oscuro premium
+base                  = "dark"
+primaryColor          = "#00ff9d"
+backgroundColor       = "#0e1117"
+secondaryBackgroundColor = "#1a1d29"
+textColor             = "#fafafa"
+font                  = "sans serif"
+
+[server]
+# headless=true es obligatorio en Streamlit Community Cloud
+headless              = true
+# No bloquear el puerto en Cloud (Streamlit lo asigna automáticamente)
+# port = 8501   ← NO descomentar en producción Cloud
+
+[browser]
+# No enviar telemetría de uso
+gatherUsageStats      = false
+
+[runner]
+# Evitar warnings de magic commands
+magicEnabled          = false
