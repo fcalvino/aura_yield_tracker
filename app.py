@@ -193,6 +193,26 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Session state
 # =========================================================================== #
 
+# === FIX DINAMISMO SIMULADOR ===
+def _sim_sync_preset() -> None:
+    """Cuando cambia el radio Preset APY, sincroniza el slider sim_apy."""
+    preset   = st.session_state.get("sim_preset", "Pool actual")
+    pool_apy = st.session_state.get("sim_current_pool_apy", 0.0)
+    preset_map = {
+        "Conservador 4%": 4.0,
+        "Base 6.5%":      6.5,
+        "Optimista 12%":  12.0,
+        "Pool actual":    pool_apy,
+    }
+    if preset in preset_map:
+        st.session_state["sim_apy"] = preset_map[preset]
+
+
+def _sim_apy_to_custom() -> None:
+    """Cuando el usuario mueve el slider APY, cambia preset a Custom."""
+    st.session_state["sim_preset"] = "Custom"
+
+
 def _init_state() -> None:
     ss = st.session_state
     ss.setdefault("deposit_usd", 3240.00)
@@ -202,6 +222,12 @@ def _init_state() -> None:
     # === FIX 1: Auto-refresh state ===
     ss.setdefault("refresh_start", None)
     ss.setdefault("refresh_interval", 15)
+    # === FIX DINAMISMO SIMULADOR ===
+    ss.setdefault("sim_deposito",         3240.00)
+    ss.setdefault("sim_preset",           "Pool actual")
+    ss.setdefault("sim_apy",              6.5)
+    ss.setdefault("sim_meses",            12)
+    ss.setdefault("sim_current_pool_apy", 0.0)
 
 
 _init_state()
@@ -573,6 +599,10 @@ with st.sidebar:
     st.session_state.selected_pool_id = ids[labels.index(selected_label)]
 
 selected = df_view[df_view["Pool_ID"] == st.session_state.selected_pool_id].iloc[0]
+# === FIX DINAMISMO SIMULADOR ===
+st.session_state["sim_current_pool_apy"] = (
+    float(selected["APY_Total"]) if pd.notna(selected["APY_Total"]) else 0.0
+)
 
 
 # =========================================================================== #
@@ -815,6 +845,7 @@ with tab_table:
 # Tab 3 · Simulador de compounding
 # --------------------------------------------------------------------------- #
 with tab_sim:
+    # === FIX DINAMISMO SIMULADOR ===
     st.markdown("### 🧮 Simulador de compounding mensual")
     st.caption(
         "Fórmula: **FV = P · (1 + r/12)ⁿ**. No contempla gas, slippage "
@@ -823,33 +854,48 @@ with tab_sim:
 
     col_s1, col_s2, col_s3 = st.columns([1.2, 1.2, 1.2])
     with col_s1:
-        principal = st.number_input(
+        st.number_input(
             "Monto inicial (USD)",
             min_value=0.0, max_value=10_000_000.0,
             value=float(st.session_state.deposit_usd),
             step=100.0, format="%.2f",
+            key="sim_deposito",
         )
     with col_s2:
-        preset_apy = st.radio(
+        preset_options = ["Conservador 4%", "Base 6.5%", "Optimista 12%", "Pool actual", "Custom"]
+        st.radio(
             "Preset APY",
-            ["Conservador 4%", "Base 6.5%", "Optimista 12%", "Pool actual", "Custom"],
-            index=3, horizontal=False,
+            preset_options,
+            index=preset_options.index(st.session_state.get("sim_preset", "Pool actual")),
+            horizontal=False,
+            key="sim_preset",
+            on_change=_sim_sync_preset,
         )
     with col_s3:
-        months = st.slider("Meses a proyectar", min_value=1, max_value=60, value=12)
+        st.slider("Meses a proyectar", min_value=1, max_value=60, key="sim_meses")
 
-    current_pool_apy = float(selected["APY_Total"]) if pd.notna(selected["APY_Total"]) else 0.0
-    preset_map = {
+    # Sincronización inline: si el preset no es Custom, forzar APY antes de dibujar el slider.
+    # Cubre el primer render y el caso de cambio de pool con preset "Pool actual".
+    _preset_now = st.session_state.get("sim_preset", "Pool actual")
+    _pool_apy   = st.session_state.get("sim_current_pool_apy", 0.0)
+    _preset_map = {
         "Conservador 4%": 4.0,
-        "Base 6.5%": 6.5,
-        "Optimista 12%": 12.0,
-        "Pool actual": current_pool_apy,
+        "Base 6.5%":      6.5,
+        "Optimista 12%":  12.0,
+        "Pool actual":    _pool_apy,
     }
-    default_apy = preset_map.get(preset_apy, current_pool_apy)
-    apy_used = st.slider(
-        "APY asumido (%)", min_value=0.0, max_value=50.0,
-        value=float(default_apy), step=0.1,
+    if _preset_now in _preset_map:
+        st.session_state["sim_apy"] = _preset_map[_preset_now]
+
+    st.slider(
+        "APY asumido (%)", min_value=0.0, max_value=50.0, step=0.1,
+        key="sim_apy",
+        on_change=_sim_apy_to_custom,
     )
+
+    principal = st.session_state["sim_deposito"]
+    apy_used  = st.session_state["sim_apy"]
+    months    = st.session_state["sim_meses"]
 
     tbl = compounding_table(principal, apy_used, months)
     if tbl.empty:
