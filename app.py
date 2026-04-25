@@ -54,15 +54,17 @@ REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2
 
+# === FIX 4b: Stable tokens ampliado con keywords más robustas ===
 STABLE_TOKENS: set[str] = {
     # USD majors
     "USDC", "USDT", "DAI", "USDBC", "USDT0", "PYUSD", "FDUSD", "TUSD", "BUSD",
     # CDP / algorítmicas / synthetic
     "GHO", "CRVUSD", "LUSD", "FRAX", "MIM", "USDE", "SUSDE", "USDS", "USDM",
     "USDY", "MKUSD", "USDX", "SUSD", "DOLA", "RAI", "USDP", "GUSD", "USDZ",
-    "BOLD",
-    # EUR
-    "EURC", "EURS", "AGEUR", "EURA", "EURT",
+    "BOLD", "USDD", "USDR", "FXUSD", "FRXUSD",
+    # EUR / other fiat pegs
+    "EURC", "EURS", "AGEUR", "EURA", "EURT", "EURE", "VCHF",
+    "XSGD", "NZDS", "BRLA",
     # Aave-wrapped (aTokens)
     "AUSDC", "AUSDT", "ADAI", "AGHO", "AUSDBC",
     # Compound-wrapped
@@ -197,6 +199,9 @@ def _init_state() -> None:
     ss.setdefault("selected_pool_id", None)
     ss.setdefault("only_stables", True)
     ss.setdefault("pure_stables_only", False)
+    # === FIX 1: Auto-refresh state ===
+    ss.setdefault("refresh_start", None)
+    ss.setdefault("refresh_interval", 15)
 
 
 _init_state()
@@ -271,7 +276,7 @@ def fetch_pool_chart(pool_id: str) -> pd.DataFrame:
     return df
 
 
-_TOKEN_SPLIT_RE   = re.compile(r"[-/_\s]+")
+_TOKEN_SPLIT_RE   = re.compile(r"[-/_\s\.]+")
 _WEIGHT_PREFIX_RE = re.compile(r"^\d+([A-Z].*)$")
 
 
@@ -426,15 +431,33 @@ with st.sidebar:
         st.toast("Cache limpiada — recargando datos...", icon="🔄")
         st.rerun()
 
+    # === FIX 1: Auto-refresh real con countdown ===
     auto_refresh = st.checkbox("⏱️ Auto-refresh", value=False,
                                help="Recarga automática en el intervalo elegido.")
     if auto_refresh:
-        interval = st.select_slider("Intervalo (min)", options=[5, 15, 30, 60], value=15)
-        st.markdown(
-            f'<meta http-equiv="refresh" content="{interval * 60}">',
-            unsafe_allow_html=True,
-        )
-        st.caption(f"Auto-refresh activo cada {interval} min.")
+        interval = st.select_slider("Intervalo (min)", options=[5, 15, 30, 60],
+                                    value=st.session_state.refresh_interval)
+        st.session_state.refresh_interval = interval
+        interval_secs = interval * 60
+
+        if st.session_state.refresh_start is None:
+            st.session_state.refresh_start = time.time()
+
+        elapsed = time.time() - st.session_state.refresh_start
+        remaining = max(0.0, interval_secs - elapsed)
+
+        if remaining == 0:
+            st.session_state.refresh_start = time.time()
+            st.cache_data.clear()
+            st.rerun()
+
+        mins, secs = divmod(int(remaining), 60)
+        countdown_ph = st.empty()
+        countdown_ph.caption(f"⏱️ Próximo refresh en **{mins}:{secs:02d}** min")
+        time.sleep(1)
+        st.rerun()
+    else:
+        st.session_state.refresh_start = None
 
     st.divider()
 
@@ -612,14 +635,34 @@ with tab_ov:
     pool_id  = selected["Pool_ID"]
     ptype    = selected["Type"]
 
-    badge_class = {"Stable": "badge-stable", "Semi-stable": "badge-semi"}.get(ptype, "badge-volatile")
+    # === FIX 3: Pool header prominente con badge y link directo ===
+    _badge_colors = {"Stable": "#00ff9d", "Semi-stable": "#ffd700", "Volatile": "#ff4b4b"}
+    _badge_col = _badge_colors.get(ptype, "#888888")
+    _pool_url  = selected.get("URL") or "https://app.aura.finance/#/base/pool"
     st.markdown(
-        f"<div class='pool-card'>"
-        f"<h3>{apy_emoji(apy)} {sym} "
-        f"<span class='badge {badge_class}'>{ptype}</span></h3>"
-        f"<div class='sub'>Pool ID: <code>{pool_id}</code> · "
-        f"<a href='{selected['URL']}' target='_blank'>Ver en Aura Finance ↗</a></div>"
-        f"</div>",
+        f"""
+        <div style="background:#1a1a2e;border-left:5px solid {_badge_col};
+                    padding:18px 22px;border-radius:10px;margin-bottom:18px;
+                    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <span style="font-size:1.7rem;font-weight:800;color:#ffffff;letter-spacing:.5px">
+              {apy_emoji(apy)} {sym}
+            </span>
+            <span style="background:{_badge_col};color:#000;padding:3px 12px;border-radius:14px;
+                         font-size:.78rem;font-weight:700;margin-left:10px;vertical-align:middle">
+              {ptype}
+            </span>
+            <div style="color:#8888aa;font-size:.8rem;margin-top:4px">
+              Pool ID: <code style="color:#aaaacc">{pool_id}</code>
+            </div>
+          </div>
+          <a href="{_pool_url}" target="_blank"
+             style="background:{_badge_col};color:#000;font-weight:700;padding:8px 16px;
+                    border-radius:8px;text-decoration:none;font-size:.88rem;white-space:nowrap">
+            🔗 Ver en Aura Finance ↗
+          </a>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -720,26 +763,52 @@ with tab_table:
     if search:
         df_table = df_table[df_table["Symbol"].str.contains(search, case=False, na=False)]
 
+    # === FIX 4a: Columna retorno mensual estimado con depósito actual ===
+    _deposit_now = float(st.session_state.deposit_usd)
+    df_table = df_table.copy()
+    df_table["Retorno mensual est."] = df_table["APY_Total"].fillna(0).apply(
+        lambda apy: _deposit_now * ((1 + apy / 100) ** (1 / 12) - 1)
+    )
+
     if df_table.empty:
         st.info("No hay pools que cumplan los filtros actuales.")
     else:
-        st.dataframe(
-            df_table[["Symbol", "Type", "TVL_USD", "APY_Total", "APY_Base", "APY_Reward", "Pool_ID", "URL"]],
+        # === FIX 2: Click-to-select — on_select actualiza selected_pool_id ===
+        sel = st.dataframe(
+            df_table[["Symbol", "Type", "TVL_USD", "APY_Total", "APY_Base",
+                      "APY_Reward", "Retorno mensual est.", "Pool_ID", "URL"]],
             use_container_width=True,
             height=560,
             column_config={
-                "Symbol":     st.column_config.TextColumn("Symbol",       width="medium"),
-                "Type":       st.column_config.TextColumn("Tipo",         width="small"),
-                "TVL_USD":    st.column_config.NumberColumn("TVL",        format="$%,.0f"),
-                "APY_Total":  st.column_config.NumberColumn("APY Total",  format="%.2f%%"),
-                "APY_Base":   st.column_config.NumberColumn("APY Base",   format="%.2f%%"),
-                "APY_Reward": st.column_config.NumberColumn("APY Reward", format="%.2f%%"),
-                "Pool_ID":    st.column_config.TextColumn("Pool ID",      width="medium"),
-                "URL":        st.column_config.LinkColumn("Link",         display_text="↗"),
+                "Symbol":               st.column_config.TextColumn("Symbol",                width="medium"),
+                "Type":                 st.column_config.TextColumn("Tipo",                  width="small"),
+                "TVL_USD":              st.column_config.NumberColumn("TVL",                 format="$%,.0f"),
+                "APY_Total":            st.column_config.NumberColumn("APY Total",           format="%.2f%%"),
+                "APY_Base":             st.column_config.NumberColumn("APY Base",            format="%.2f%%"),
+                "APY_Reward":           st.column_config.NumberColumn("APY Reward",          format="%.2f%%"),
+                "Retorno mensual est.": st.column_config.NumberColumn("Retorno mensual est.",format="$%.2f"),
+                "Pool_ID":              st.column_config.TextColumn("Pool ID",               width="medium"),
+                "URL":                  st.column_config.LinkColumn("Link",                  display_text="↗"),
             },
             hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="pool_table_selection",
         )
-        st.caption(f"Mostrando **{len(df_table)}** de **{len(df_view)}** pools filtrados.")
+        if sel.selection.rows:
+            _clicked_idx = sel.selection.rows[0]
+            _clicked_id  = df_table.iloc[_clicked_idx]["Pool_ID"]
+            if _clicked_id != st.session_state.selected_pool_id:
+                st.session_state.selected_pool_id = _clicked_id
+                st.toast(
+                    f"Pool seleccionado: {df_table.iloc[_clicked_idx]['Symbol']}",
+                    icon="✅",
+                )
+                st.rerun()
+        st.caption(
+            f"Mostrando **{len(df_table)}** de **{len(df_view)}** pools filtrados. "
+            f"Haz clic en una fila para seleccionar el pool en Overview."
+        )
 
 
 # --------------------------------------------------------------------------- #
