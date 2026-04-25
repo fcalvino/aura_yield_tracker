@@ -54,6 +54,13 @@ REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2
 
+# === MULTI-CHAIN SUPPORT ===
+CHAINS: dict[str, dict] = {
+    "Base":     {"id": 8453,  "display_name": "Base"},
+    "Ethereum": {"id": 1,     "display_name": "Ethereum"},
+    "Arbitrum": {"id": 42161, "display_name": "Arbitrum"},
+}
+
 # === FIX 4b: Stable tokens ampliado con keywords más robustas ===
 STABLE_TOKENS: set[str] = {
     # USD majors
@@ -217,6 +224,7 @@ def _init_state() -> None:
     ss = st.session_state
     ss.setdefault("deposit_usd", 3240.00)
     ss.setdefault("selected_pool_id", None)
+    ss.setdefault("selected_chain", "Base")  # === MULTI-CHAIN SUPPORT ===
     ss.setdefault("only_stables", True)
     ss.setdefault("pure_stables_only", False)
     # === FIX 1: Auto-refresh state ===
@@ -231,6 +239,11 @@ def _init_state() -> None:
 
 
 _init_state()
+
+
+# === MULTI-CHAIN SUPPORT === Callback: reset selected pool when chain switches
+def _reset_pool_on_chain_change() -> None:
+    st.session_state["selected_pool_id"] = None
 
 
 # =========================================================================== #
@@ -331,7 +344,7 @@ def classify_pool(pool: dict[str, Any]) -> str:
     return "Volatile"
 
 
-def pools_to_dataframe(pools: list[dict[str, Any]]) -> pd.DataFrame:
+def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453) -> pd.DataFrame:  # === MULTI-CHAIN SUPPORT ===
     rows: list[dict[str, Any]] = []
     for p in pools:
         rows.append({
@@ -342,8 +355,8 @@ def pools_to_dataframe(pools: list[dict[str, Any]]) -> pd.DataFrame:
             "APY_Reward":    p.get("apyReward"),
             "Pool_ID":       p.get("pool"),
             "Type":          classify_pool(p),
-            "URL": p.get("url") or (
-                f"https://app.aura.finance/#/8453/pool/{p.get('pool')}"
+            "URL": p.get("url") or (  # === MULTI-CHAIN SUPPORT ===
+                f"https://app.aura.finance/#/{chain_id}/pool/{p.get('pool')}"
                 if p.get("pool") else ""
             ),
             "Stablecoin_Flag": bool(p.get("stablecoin", False)),
@@ -356,7 +369,8 @@ def pools_to_dataframe(pools: list[dict[str, Any]]) -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_aura_base_pools(chain: str = "Base") -> pd.DataFrame:
-    """Pipeline completo: descarga → filtra Aura/Base → tabula."""
+    """Pipeline completo: descarga → filtra Aura/<chain> → tabula."""
+    chain_id = CHAINS.get(chain, {}).get("id", 8453)  # === MULTI-CHAIN SUPPORT ===
     all_pools = fetch_all_pools()
     chain_lower = chain.lower()
     aura = [
@@ -367,7 +381,7 @@ def fetch_aura_base_pools(chain: str = "Base") -> pd.DataFrame:
         and p["chain"].lower() == chain_lower
     ]
     logger.info("Filtrado a %d pools de Aura en %s", len(aura), chain)
-    return pools_to_dataframe(aura)
+    return pools_to_dataframe(aura, chain_id=chain_id)  # === MULTI-CHAIN SUPPORT ===
 
 
 # =========================================================================== #
@@ -440,12 +454,14 @@ def plotly_dark_layout(**overrides: Any) -> dict[str, Any]:
 # =========================================================================== #
 
 with st.sidebar:
+    # === MULTI-CHAIN SUPPORT === Chain name in sidebar subtitle
+    _chain_name = st.session_state.get("selected_chain", "Base")
     st.markdown(
         "<div style='padding:0.6rem 0 0.2rem 0;'>"
         "<span style='font-size:1.6rem;'>📈</span>"
         "<span style='font-size:1.15rem; font-weight:700; color:#00ff9d; margin-left:6px;'>"
         "AuraYieldTracker</span>"
-        "<div style='color:#8b93a7; font-size:0.8rem; margin-top:2px;'>Stables · Base Chain</div>"
+        f"<div style='color:#8b93a7; font-size:0.8rem; margin-top:2px;'>Stables · {_chain_name} Chain</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -487,11 +503,13 @@ with st.sidebar:
 
     st.divider()
 
+    # === MULTI-CHAIN SUPPORT === Active chain selector
     st.selectbox(
         "🔗 Chain",
-        options=["Base ✅", "Ethereum (próximo)", "Arbitrum (próximo)"],
-        index=0, disabled=True,
-        help="Por ahora solo Base. Ethereum y Arbitrum en roadmap.",
+        options=list(CHAINS.keys()),
+        key="selected_chain",
+        on_change=_reset_pool_on_chain_change,
+        help="Selecciona la red de Aura Finance a monitorear.",
     )
 
     st.number_input(
@@ -513,15 +531,15 @@ with st.sidebar:
     )
 
     st.divider()
-    st.markdown(
-        "🔗 [Aura Finance · Base](https://app.aura.finance/#/8453)  \n"
+    st.markdown(  # === MULTI-CHAIN SUPPORT ===
+        f"🔗 [Aura Finance · {_chain_name}](https://app.aura.finance/#/{CHAINS[_chain_name]['id']})  \n"
         "📊 [DeFiLlama Yields](https://defillama.com/yields)  \n"
         "🐦 [Twitter · Aura](https://twitter.com/AuraFinance)"
     )
     st.divider()
-    st.caption(
-        "Dashboard público de monitoreo para pools de stablecoins en Aura Finance "
-        "(chain Base). Datos vía DeFiLlama API · Cache 5 min.\n\n"
+    st.caption(  # === MULTI-CHAIN SUPPORT ===
+        f"Dashboard público de monitoreo para pools de stablecoins en Aura Finance "
+        f"(chain {_chain_name}). Datos vía DeFiLlama API · Cache 5 min.\n\n"
         "⚠️ *No es asesoramiento financiero.* APYs variables, riesgos de "
         "smart-contract, de-peg e impermanent loss."
     )
@@ -531,14 +549,10 @@ with st.sidebar:
 # Data loading
 # =========================================================================== #
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_pools() -> pd.DataFrame:
-    return fetch_aura_base_pools(chain="Base")
-
-
+# === MULTI-CHAIN SUPPORT === fetch_aura_base_pools already cached; chain param differentiates cache keys
 with st.spinner("📡 Cargando pools desde DeFiLlama..."):
     try:
-        df_all = _load_pools()
+        df_all = fetch_aura_base_pools(chain=st.session_state.selected_chain)
         load_error: str | None = None
     except Exception as exc:  # noqa: BLE001
         df_all = pd.DataFrame()
@@ -553,9 +567,9 @@ if load_error:
     )
     st.stop()
 
-if df_all.empty:
+if df_all.empty:  # === MULTI-CHAIN SUPPORT ===
     st.warning(
-        "⚠️ No se encontraron pools de Aura en Base en este momento. "
+        f"⚠️ No se encontraron pools de Aura en {st.session_state.selected_chain} en este momento. "
         "Pulsá **🔄 Refresh Data** en el sidebar para reintentar."
     )
     st.stop()
@@ -565,9 +579,9 @@ df_view = df_all.copy()
 if st.session_state.only_stables:
     df_view = df_view[df_view["Type"].isin(["Stable", "Semi-stable"])].reset_index(drop=True)
 
-if df_view.empty:
+if df_view.empty:  # === MULTI-CHAIN SUPPORT ===
     st.warning(
-        "⚠️ No hay pools de stables activos en Aura Base ahora mismo. "
+        f"⚠️ No hay pools de stables activos en Aura {st.session_state.selected_chain} ahora mismo. "
         "Desactivá **Solo Stables** en el sidebar para ver el universo completo."
     )
     st.stop()
@@ -613,10 +627,12 @@ now_utc  = datetime.now(pytz.UTC)
 ts_art   = now_utc.astimezone(pytz.timezone("America/Argentina/Buenos_Aires"))
 ts_label = ts_art.strftime("%Y-%m-%d %H:%M ART")
 
+# === MULTI-CHAIN SUPPORT === Dynamic chain name in welcome banner
+_active_chain = st.session_state.selected_chain
 st.markdown(
     "<div class='welcome-banner'>"
-    "<h2>📈 AuraYieldTracker · Stables Base</h2>"
-    "<p>Monitoreo en tiempo real de pools de stablecoins de Aura Finance en Base – "
+    f"<h2>📈 AuraYieldTracker · Stables {_active_chain}</h2>"
+    f"<p>Monitoreo en tiempo real de pools de stablecoins de Aura Finance en {_active_chain} – "
     "APY, TVL y simulador de compounding. "
     "Herramienta pública y gratuita · Datos de "
     "<a href='https://defillama.com/yields' target='_blank'>DeFiLlama</a>.</p>"
@@ -644,9 +660,9 @@ with col_h3:
 # Tabs (orden: Overview | Todos los Pools | Simulador | Histórico)
 # =========================================================================== #
 
-tab_ov, tab_table, tab_sim, tab_hist = st.tabs([
-    "🎯 Overview",
-    "📋 Todos los Pools de Stables",
+tab_ov, tab_table, tab_sim, tab_hist = st.tabs([  # === MULTI-CHAIN SUPPORT ===
+    f"🎯 Overview · {_active_chain}",
+    f"📋 Pools de Stables · {_active_chain}",
     "🧮 Simulador de Compounding",
     "📊 Histórico & Análisis",
 ])
@@ -764,7 +780,7 @@ with tab_ov:
 # Tab 2 · Tabla completa de stables
 # --------------------------------------------------------------------------- #
 with tab_table:
-    st.markdown("### 📋 Todos los pools de stables — Aura · Base")
+    st.markdown(f"### 📋 Todos los pools de stables — Aura · {_active_chain}")  # === MULTI-CHAIN SUPPORT ===
 
     col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.2, 1.4, 1.2])
     with col_f1:
@@ -1003,7 +1019,7 @@ with tab_hist:
             st.download_button(
                 "⬇️ Pools filtrados (CSV)",
                 data=df_view.to_csv(index=False).encode("utf-8"),
-                file_name=f"aura_stables_base_{now_utc.strftime('%Y%m%d_%H%M')}.csv",
+                file_name=f"aura_stables_{_active_chain.lower()}_{now_utc.strftime('%Y%m%d_%H%M')}.csv",  # === MULTI-CHAIN SUPPORT ===
                 mime="text/csv", use_container_width=True,
             )
         with e2:
@@ -1017,7 +1033,7 @@ with tab_hist:
             st.download_button(
                 "⬇️ Pools (JSON)",
                 data=df_view.to_json(orient="records", indent=2).encode("utf-8"),
-                file_name=f"aura_stables_base_{now_utc.strftime('%Y%m%d_%H%M')}.json",
+                file_name=f"aura_stables_{_active_chain.lower()}_{now_utc.strftime('%Y%m%d_%H%M')}.json",  # === MULTI-CHAIN SUPPORT ===
                 mime="application/json", use_container_width=True,
             )
 
@@ -1030,7 +1046,7 @@ st.markdown(
     f"<div class='app-footer'>"
     f"Datos de <a href='https://defillama.com/yields' target='_blank'>DeFiLlama</a> · "
     f"Última actualización: <strong>{ts_label}</strong> · "
-    f"<a href='https://app.aura.finance/#/8453' target='_blank'>Aura Finance ↗</a> · "
+    f"<a href='https://app.aura.finance/#/{CHAINS[_active_chain]['id']}' target='_blank'>Aura Finance · {_active_chain} ↗</a> · "  # === MULTI-CHAIN SUPPORT ===
     f"Cache TTL 5 min · {len(STABLE_TOKENS)} stable-tokens reconocidos"
     f"</div>",
     unsafe_allow_html=True,
