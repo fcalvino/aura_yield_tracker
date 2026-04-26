@@ -380,11 +380,18 @@ def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453, pid_ma
     for p in pools:
         ut = frozenset(t.lower() for t in (p.get("underlyingTokens") or []))
         aura_pid: str | None = None
+        best_score = 0
         if pid_map and ut:
             for (cid, toks), pid in pid_map.items():
-                if cid == chain_id and ut.issubset(toks):
-                    aura_pid = pid
-                    break
+                # Match: all Aura tokens appear in DeFiLlama's token set.
+                # Boosted pools have more tokens on DeFiLlama than on Aura,
+                # so we check aura_toks ⊆ ut (not the other way around).
+                # Pick the largest matching Aura token set to avoid false positives.
+                if cid == chain_id and toks and toks.issubset(ut):
+                    score = len(toks)
+                    if score > best_score:
+                        best_score = score
+                        aura_pid = pid
         url = (
             f"https://app.aura.finance/#/{chain_id}/pool/{aura_pid}"
             if aura_pid else
