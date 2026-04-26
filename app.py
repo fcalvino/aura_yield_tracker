@@ -234,7 +234,7 @@ def _init_state() -> None:
     ss.setdefault("refresh_interval", 15)
     # === FIX DINAMISMO SIMULADOR ===
     ss.setdefault("sim_deposito",         3240.00)
-    ss.setdefault("sim_preset",           "Pool actual")
+    ss.setdefault("sim_preset",           "")   # se asigna dinámicamente en tab_sim
     ss.setdefault("sim_apy",              6.5)
     ss.setdefault("sim_meses",            12)
     ss.setdefault("sim_current_pool_apy", 0.0)
@@ -946,6 +946,27 @@ with tab_sim:
         "ni variaciones del APY — es una proyección teórica de referencia."
     )
 
+    # ── Opciones dinámicas: pools de la chain activa ordenados por APY ──
+    _sim_df = df_view[df_view["APY_Total"].notna()].sort_values("APY_Total", ascending=False)
+    _sim_pool_labels = [
+        f"{r['Symbol']}  ·  {fmt_pct(r['APY_Total'])}"
+        for _, r in _sim_df.iterrows()
+    ]
+    _sim_apy_map: dict[str, float] = {
+        f"{r['Symbol']}  ·  {fmt_pct(r['APY_Total'])}": float(r['APY_Total'])
+        for _, r in _sim_df.iterrows()
+    }
+    _sim_options = _sim_pool_labels + ["Custom"]
+
+    # Si el preset guardado ya no existe (cambio de chain), usar el pool con mayor APY
+    if st.session_state.get("sim_preset") not in _sim_options:
+        st.session_state["sim_preset"] = _sim_pool_labels[0] if _sim_pool_labels else "Custom"
+
+    def _sim_pool_select() -> None:
+        preset = st.session_state["sim_preset"]
+        if preset in _sim_apy_map:
+            st.session_state["sim_apy"] = min(_sim_apy_map[preset], 50.0)
+
     col_s1, col_s2, col_s3 = st.columns([1.2, 1.2, 1.2])
     with col_s1:
         st.number_input(
@@ -956,30 +977,24 @@ with tab_sim:
             key="sim_deposito",
         )
     with col_s2:
-        preset_options = ["Conservador 4%", "Base 6.5%", "Optimista 12%", "Pool actual", "Custom"]
-        st.radio(
-            "Preset APY",
-            preset_options,
-            index=preset_options.index(st.session_state.get("sim_preset", "Pool actual")),
-            horizontal=False,
+        _sim_default_idx = (
+            _sim_options.index(st.session_state["sim_preset"])
+            if st.session_state["sim_preset"] in _sim_options else 0
+        )
+        st.selectbox(
+            f"Pool ({_active_chain})",
+            options=_sim_options,
+            index=_sim_default_idx,
             key="sim_preset",
-            on_change=_sim_sync_preset,
+            on_change=_sim_pool_select,
         )
     with col_s3:
         st.slider("Meses a proyectar", min_value=1, max_value=60, key="sim_meses")
 
-    # Sincronización inline: si el preset no es Custom, forzar APY antes de dibujar el slider.
-    # Cubre el primer render y el caso de cambio de pool con preset "Pool actual".
-    _preset_now = st.session_state.get("sim_preset", "Pool actual")
-    _pool_apy   = st.session_state.get("sim_current_pool_apy", 0.0)
-    _preset_map = {
-        "Conservador 4%": 4.0,
-        "Base 6.5%":      6.5,
-        "Optimista 12%":  12.0,
-        "Pool actual":    _pool_apy,
-    }
-    if _preset_now in _preset_map:
-        st.session_state["sim_apy"] = min(_preset_map[_preset_now], 50.0)
+    # Sincronización inline: si no es Custom, forzar APY antes de dibujar el slider
+    _preset_now = st.session_state.get("sim_preset", "Custom")
+    if _preset_now != "Custom" and _preset_now in _sim_apy_map:
+        st.session_state["sim_apy"] = min(_sim_apy_map[_preset_now], 50.0)
 
     st.slider(
         "APY asumido (%)", min_value=0.0, max_value=50.0, step=0.1,
