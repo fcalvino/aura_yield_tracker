@@ -358,18 +358,22 @@ def fetch_aura_pid_map() -> dict:
         try:
             resp = requests.post(
                 AURA_GRAPHQL_URL,
-                json={"query": f"{{pools(chainId:{cid}){{poolId tokens{{address}}}}}}"},
+                json={"query": f"{{pools(chainId:{cid}){{poolId isShutdown tokens{{address}}}}}}"},
                 timeout=15,
                 headers={"Content-Type": "application/json"},
             )
             resp.raise_for_status()
             pools = resp.json().get("data", {}).get("pools", [])
+            active = 0
             for p in pools:
+                if p.get("isShutdown"):
+                    continue
                 pid = p.get("poolId")
                 toks = frozenset(t["address"].lower() for t in (p.get("tokens") or []))
                 if pid and toks:
                     pid_map[(cid, toks)] = pid
-            logger.info("fetch_aura_pid_map: chain=%d → %d pools", cid, len(pools))
+                    active += 1
+            logger.info("fetch_aura_pid_map: chain=%d → %d active / %d total", cid, active, len(pools))
         except Exception as exc:
             logger.warning("fetch_aura_pid_map falló chain=%d: %s", cid, exc)
     return pid_map
