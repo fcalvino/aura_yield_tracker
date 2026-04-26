@@ -646,7 +646,9 @@ with st.sidebar:
     ids = pool_sorted["Pool_ID"].tolist()
 
     if st.session_state.selected_pool_id not in ids:
-        st.session_state.selected_pool_id = ids[0] if ids else None
+        # Default: pool con mayor TVL
+        tvl_sorted_ids = df_view.sort_values("TVL_USD", ascending=False, na_position="last")["Pool_ID"].tolist()
+        st.session_state.selected_pool_id = tvl_sorted_ids[0] if tvl_sorted_ids else None
 
     default_idx = (
         ids.index(st.session_state.selected_pool_id)
@@ -659,13 +661,6 @@ with st.sidebar:
         key="pool_selector",
     )
     st.session_state.selected_pool_id = ids[labels.index(selected_label)]
-
-selected = df_view[df_view["Pool_ID"] == st.session_state.selected_pool_id].iloc[0]
-# === FIX DINAMISMO SIMULADOR ===
-st.session_state["sim_current_pool_apy"] = (
-    float(selected["APY_Total"]) if pd.notna(selected["APY_Total"]) else 0.0
-)
-
 
 # =========================================================================== #
 # Welcome banner + header principal
@@ -720,6 +715,31 @@ tab_ov, tab_table, tab_sim, tab_hist = st.tabs([  # === MULTI-CHAIN SUPPORT ===
 # Tab 1 · Overview del pool seleccionado
 # --------------------------------------------------------------------------- #
 with tab_ov:
+    # ── Pool selector dentro del tab (ordenado por TVL ↓) ──
+    _ov_sorted = df_view.sort_values("TVL_USD", ascending=False, na_position="last")
+    _ov_ids    = _ov_sorted["Pool_ID"].tolist()
+    _ov_labels = [
+        f"{r['Symbol']}  ·  TVL {fmt_usd(r['TVL_USD'])}  ·  APY {fmt_pct(r['APY_Total'])}"
+        for _, r in _ov_sorted.iterrows()
+    ]
+    _ov_default = _ov_ids.index(st.session_state.selected_pool_id) if st.session_state.selected_pool_id in _ov_ids else 0
+
+    def _ov_pool_change() -> None:
+        idx = _ov_labels.index(st.session_state["pool_selector_ov"])
+        st.session_state.selected_pool_id = _ov_ids[idx]
+
+    st.selectbox(
+        "🎯 Pool",
+        options=_ov_labels,
+        index=_ov_default,
+        key="pool_selector_ov",
+        on_change=_ov_pool_change,
+    )
+    selected = df_view[df_view["Pool_ID"] == st.session_state.selected_pool_id].iloc[0]
+    st.session_state["sim_current_pool_apy"] = (
+        float(selected["APY_Total"]) if pd.notna(selected["APY_Total"]) else 0.0
+    )
+
     deposit  = float(st.session_state.deposit_usd)
     sym      = selected["Symbol"]
     tvl      = selected["TVL_USD"]
