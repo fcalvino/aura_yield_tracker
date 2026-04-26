@@ -213,7 +213,7 @@ def _sim_sync_preset() -> None:
         "Pool actual":    pool_apy,
     }
     if preset in preset_map:
-        st.session_state["sim_apy"] = preset_map[preset]
+        st.session_state["sim_apy"] = min(preset_map[preset], 50.0)
 
 
 def _sim_apy_to_custom() -> None:
@@ -356,10 +356,7 @@ def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453) -> pd.
             "APY_Reward":    p.get("apyReward"),
             "Pool_ID":       p.get("pool"),
             "Type":          classify_pool(p),
-            "URL": p.get("url") or (  # === MULTI-CHAIN SUPPORT ===
-                f"https://app.aura.finance/#/{chain_id}/pool/{p.get('pool')}"
-                if p.get("pool") else ""
-            ),
+            "URL": p.get("url") or f"https://app.aura.finance/#/{chain_id}",
             "Stablecoin_Flag": bool(p.get("stablecoin", False)),
         })
     df = pd.DataFrame(rows)
@@ -685,7 +682,8 @@ with tab_ov:
     # === FIX 3: Pool header prominente con badge y link directo ===
     _badge_colors = {"Stable": "#00ff9d", "Semi-stable": "#ffd700", "Volatile": "#ff4b4b"}
     _badge_col = _badge_colors.get(ptype, "#888888")
-    _pool_url  = selected.get("URL") or "https://app.aura.finance/#/base/pool"
+    _chain_id  = CHAINS.get(st.session_state.get("selected_chain", "Base"), {}).get("id", 8453)
+    _pool_url  = selected.get("URL") or f"https://app.aura.finance/#/{_chain_id}"
     st.markdown(
         f"""
         <div style="background:#1a1a2e;border-left:5px solid {_badge_col};
@@ -902,7 +900,7 @@ with tab_sim:
         "Pool actual":    _pool_apy,
     }
     if _preset_now in _preset_map:
-        st.session_state["sim_apy"] = _preset_map[_preset_now]
+        st.session_state["sim_apy"] = min(_preset_map[_preset_now], 50.0)
 
     st.slider(
         "APY asumido (%)", min_value=0.0, max_value=50.0, step=0.1,
