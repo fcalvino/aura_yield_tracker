@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 DEFILLAMA_POOLS_URL = "https://yields.llama.fi/pools"
 DEFILLAMA_CHART_URL = "https://yields.llama.fi/chart/{pool_id}"
+AURA_GRAPHQL_URL    = "https://data.aura.finance/graphql"
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2
@@ -345,9 +346,47 @@ def classify_pool(pool: dict[str, Any]) -> str:
     return "Volatile"
 
 
-def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453) -> pd.DataFrame:  # === MULTI-CHAIN SUPPORT ===
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_aura_pid_map() -> dict:
+    """Builds {(chainId, frozenset_of_token_addrs_lower): poolId} from Aura GraphQL."""
+    try:
+        resp = requests.post(
+            AURA_GRAPHQL_URL,
+            json={"query": "{pools{poolId chainId tokens{address}}}"},
+            timeout=15,
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        pools = resp.json().get("data", {}).get("pools", [])
+        pid_map: dict = {}
+        for p in pools:
+            cid = p.get("chainId")
+            pid = p.get("poolId")
+            toks = frozenset(t["address"].lower() for t in (p.get("tokens") or []))
+            if cid and pid and toks:
+                pid_map[(cid, toks)] = pid
+        logger.info("fetch_aura_pid_map: %d pools cargados", len(pid_map))
+        return pid_map
+    except Exception as exc:
+        logger.warning("fetch_aura_pid_map falló: %s", exc)
+        return {}
+
+
+def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453, pid_map: dict | None = None) -> pd.DataFrame:  # === MULTI-CHAIN SUPPORT ===
     rows: list[dict[str, Any]] = []
     for p in pools:
+        ut = frozenset(t.lower() for t in (p.get("underlyingTokens") or []))
+        aura_pid: str | None = None
+        if pid_map and ut:
+            for (cid, toks), pid in pid_map.items():
+                if cid == chain_id and ut.issubset(toks):
+                    aura_pid = pid
+                    break
+        url = (
+            f"https://app.aura.finance/#/{chain_id}/pool/{aura_pid}"
+            if aura_pid else
+            f"https://app.aura.finance/#/{chain_id}"
+        )
         rows.append({
             "Symbol":        p.get("symbol"),
             "TVL_USD":       p.get("tvlUsd"),
@@ -356,7 +395,7 @@ def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453) -> pd.
             "APY_Reward":    p.get("apyReward"),
             "Pool_ID":       p.get("pool"),
             "Type":          classify_pool(p),
-            "URL": p.get("url") or f"https://app.aura.finance/#/{chain_id}",
+            "URL":           url,
             "Stablecoin_Flag": bool(p.get("stablecoin", False)),
         })
     df = pd.DataFrame(rows)
@@ -379,7 +418,8 @@ def fetch_aura_base_pools(chain: str = "Base") -> pd.DataFrame:
         and p["chain"].lower() == chain_lower
     ]
     logger.info("Filtrado a %d pools de Aura en %s", len(aura), chain)
-    return pools_to_dataframe(aura, chain_id=chain_id)  # === MULTI-CHAIN SUPPORT ===
+    pid_map = fetch_aura_pid_map()
+    return pools_to_dataframe(aura, chain_id=chain_id, pid_map=pid_map)  # === MULTI-CHAIN SUPPORT ===
 
 
 # =========================================================================== #
