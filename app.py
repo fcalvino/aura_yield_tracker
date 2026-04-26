@@ -87,7 +87,7 @@ STABLE_TOKENS: set[str] = {
 CUSTOM_CSS = """
 <style>
 #MainMenu, footer, header {visibility: hidden;}
-[data-testid="collapsedControl"] { visibility: visible !important; display: block !important; }
+[data-testid="stExpandSidebarButton"] { position: fixed !important; left: 0.5rem !important; top: 0.5rem !important; z-index: 999999 !important; visibility: visible !important; display: flex !important; opacity: 1 !important; pointer-events: all !important; }
 
 .main .block-container {
     padding-top: 0.8rem;
