@@ -348,28 +348,31 @@ def classify_pool(pool: dict[str, Any]) -> str:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_aura_pid_map() -> dict:
-    """Builds {(chainId, frozenset_of_token_addrs_lower): poolId} from Aura GraphQL."""
-    try:
-        resp = requests.post(
-            AURA_GRAPHQL_URL,
-            json={"query": "{pools{poolId chainId tokens{address}}}"},
-            timeout=15,
-            headers={"Content-Type": "application/json"},
-        )
-        resp.raise_for_status()
-        pools = resp.json().get("data", {}).get("pools", [])
-        pid_map: dict = {}
-        for p in pools:
-            cid = p.get("chainId")
-            pid = p.get("poolId")
-            toks = frozenset(t["address"].lower() for t in (p.get("tokens") or []))
-            if cid and pid and toks:
-                pid_map[(cid, toks)] = pid
-        logger.info("fetch_aura_pid_map: %d pools cargados", len(pid_map))
-        return pid_map
-    except Exception as exc:
-        logger.warning("fetch_aura_pid_map falló: %s", exc)
-        return {}
+    """Builds {(chainId, frozenset_of_token_addrs_lower): poolId} from Aura GraphQL.
+
+    Aura's API returns only Ethereum when called without chainId filter,
+    so we query each supported chain explicitly.
+    """
+    pid_map: dict = {}
+    for cid in [c["id"] for c in CHAINS.values()]:
+        try:
+            resp = requests.post(
+                AURA_GRAPHQL_URL,
+                json={"query": f"{{pools(chainId:{cid}){{poolId tokens{{address}}}}}}"},
+                timeout=15,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            pools = resp.json().get("data", {}).get("pools", [])
+            for p in pools:
+                pid = p.get("poolId")
+                toks = frozenset(t["address"].lower() for t in (p.get("tokens") or []))
+                if pid and toks:
+                    pid_map[(cid, toks)] = pid
+            logger.info("fetch_aura_pid_map: chain=%d → %d pools", cid, len(pools))
+        except Exception as exc:
+            logger.warning("fetch_aura_pid_map falló chain=%d: %s", cid, exc)
+    return pid_map
 
 
 def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453, pid_map: dict | None = None) -> pd.DataFrame:  # === MULTI-CHAIN SUPPORT ===
