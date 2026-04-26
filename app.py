@@ -634,33 +634,53 @@ if df_view.empty:  # === MULTI-CHAIN SUPPORT ===
     )
     st.stop()
 
-# ── Pool selector (sidebar, después del filtro) ──
+# ── Listas de pools compartidas (calculadas antes del sidebar y los tabs) ──
+_pool_by_apy = df_view.sort_values("APY_Total", ascending=False, na_position="last")
+_sb_ids    = _pool_by_apy["Pool_ID"].tolist()
+_sb_labels = [
+    f"{r['Symbol']}  ·  {fmt_pct(r['APY_Total'])}"
+    for _, r in _pool_by_apy.iterrows()
+]
+_pool_by_tvl = df_view.sort_values("TVL_USD", ascending=False, na_position="last")
+_ov_ids    = _pool_by_tvl["Pool_ID"].tolist()
+_ov_labels = [
+    f"{r['Symbol']}  ·  TVL {fmt_usd(r['TVL_USD'])}  ·  APY {fmt_pct(r['APY_Total'])}"
+    for _, r in _pool_by_tvl.iterrows()
+]
+
+# Default: mayor TVL en primera carga o cambio de chain
+if st.session_state.selected_pool_id not in _ov_ids:
+    st.session_state.selected_pool_id = _ov_ids[0] if _ov_ids else None
+
+
+def _sb_pool_change() -> None:
+    new_id = _sb_ids[_sb_labels.index(st.session_state["pool_selector"])]
+    st.session_state.selected_pool_id = new_id
+    if new_id in _ov_ids:
+        st.session_state["pool_selector_ov"] = _ov_labels[_ov_ids.index(new_id)]
+
+
+def _ov_pool_change() -> None:
+    new_id = _ov_ids[_ov_labels.index(st.session_state["pool_selector_ov"])]
+    st.session_state.selected_pool_id = new_id
+    if new_id in _sb_ids:
+        st.session_state["pool_selector"] = _sb_labels[_sb_ids.index(new_id)]
+
+
+# ── Pool selector (sidebar) ──
 with st.sidebar:
     st.divider()
     st.markdown("**🎯 Pool activo**")
-    pool_sorted = df_view.sort_values("APY_Total", ascending=False, na_position="last")
-    labels = [
-        f"{r['Symbol']}  ·  {fmt_pct(r['APY_Total'])}"
-        for _, r in pool_sorted.iterrows()
-    ]
-    ids = pool_sorted["Pool_ID"].tolist()
-
-    if st.session_state.selected_pool_id not in ids:
-        # Default: pool con mayor TVL
-        tvl_sorted_ids = df_view.sort_values("TVL_USD", ascending=False, na_position="last")["Pool_ID"].tolist()
-        st.session_state.selected_pool_id = tvl_sorted_ids[0] if tvl_sorted_ids else None
-
-    default_idx = (
-        ids.index(st.session_state.selected_pool_id)
-        if st.session_state.selected_pool_id in ids
-        else 0
+    _sb_default = (
+        _sb_ids.index(st.session_state.selected_pool_id)
+        if st.session_state.selected_pool_id in _sb_ids else 0
     )
-    selected_label = st.selectbox(
+    st.selectbox(
         "Pool (ordenados por APY ↓)",
-        options=labels, index=default_idx,
+        options=_sb_labels, index=_sb_default,
         key="pool_selector",
+        on_change=_sb_pool_change,
     )
-    st.session_state.selected_pool_id = ids[labels.index(selected_label)]
 
 # =========================================================================== #
 # Welcome banner + header principal
@@ -716,18 +736,7 @@ tab_ov, tab_table, tab_sim, tab_hist = st.tabs([  # === MULTI-CHAIN SUPPORT ===
 # --------------------------------------------------------------------------- #
 with tab_ov:
     # ── Pool selector dentro del tab (ordenado por TVL ↓) ──
-    _ov_sorted = df_view.sort_values("TVL_USD", ascending=False, na_position="last")
-    _ov_ids    = _ov_sorted["Pool_ID"].tolist()
-    _ov_labels = [
-        f"{r['Symbol']}  ·  TVL {fmt_usd(r['TVL_USD'])}  ·  APY {fmt_pct(r['APY_Total'])}"
-        for _, r in _ov_sorted.iterrows()
-    ]
     _ov_default = _ov_ids.index(st.session_state.selected_pool_id) if st.session_state.selected_pool_id in _ov_ids else 0
-
-    def _ov_pool_change() -> None:
-        idx = _ov_labels.index(st.session_state["pool_selector_ov"])
-        st.session_state.selected_pool_id = _ov_ids[idx]
-
     st.selectbox(
         "🎯 Pool",
         options=_ov_labels,
