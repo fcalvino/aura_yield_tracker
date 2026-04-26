@@ -87,6 +87,7 @@ STABLE_TOKENS: set[str] = {
 CUSTOM_CSS = """
 <style>
 #MainMenu, footer, header {visibility: hidden;}
+[data-testid="collapsedControl"] { visibility: visible !important; display: block !important; }
 
 .main .block-container {
     padding-top: 0.8rem;
