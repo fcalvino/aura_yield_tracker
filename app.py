@@ -60,6 +60,7 @@ CHAINS: dict[str, dict] = {
     "Base":     {"id": 8453,  "display_name": "Base"},
     "Ethereum": {"id": 1,     "display_name": "Ethereum"},
     "Arbitrum": {"id": 42161, "display_name": "Arbitrum"},
+    "Gnosis":   {"id": 100,   "display_name": "Gnosis"},
 }
 
 # === FIX 4b: Stable tokens ampliado con keywords más robustas ===
