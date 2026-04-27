@@ -759,14 +759,20 @@ if st.session_state.selected_pool_id not in _ov_ids:
 
 
 def _sb_pool_change() -> None:
-    new_id = _sb_ids[_sb_labels.index(st.session_state["pool_selector"])]
+    label = st.session_state.get("pool_selector")
+    if label not in _sb_labels:
+        return
+    new_id = _sb_ids[_sb_labels.index(label)]
     st.session_state.selected_pool_id = new_id
     if new_id in _ov_ids:
         st.session_state["pool_selector_ov"] = _ov_labels[_ov_ids.index(new_id)]
 
 
 def _ov_pool_change() -> None:
-    new_id = _ov_ids[_ov_labels.index(st.session_state["pool_selector_ov"])]
+    label = st.session_state.get("pool_selector_ov")
+    if label not in _ov_labels:
+        return
+    new_id = _ov_ids[_ov_labels.index(label)]
     st.session_state.selected_pool_id = new_id
     if new_id in _sb_ids:
         st.session_state["pool_selector"] = _sb_labels[_sb_ids.index(new_id)]
