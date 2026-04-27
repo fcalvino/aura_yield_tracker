@@ -63,6 +63,14 @@ CHAINS: dict[str, dict] = {
     "Gnosis":   {"id": 100,   "display_name": "Gnosis"},
 }
 
+# Aave market names per chain (for URL construction — DeFiLlama returns url: null)
+AAVE_MARKET_NAMES: dict[str, str] = {
+    "Ethereum": "proto_mainnet_v3",
+    "Base":     "proto_base_v3",
+    "Arbitrum": "proto_arbitrum_v3",
+    "Gnosis":   "proto_gnosis_v3",
+}
+
 # === FIX 4b: Stable tokens ampliado con keywords más robustas ===
 STABLE_TOKENS: set[str] = {
     # USD majors
@@ -229,7 +237,8 @@ def _init_state() -> None:
     ss = st.session_state
     ss.setdefault("deposit_usd", 3240.00)
     ss.setdefault("selected_pool_id", None)
-    ss.setdefault("selected_chain", "Base")  # === MULTI-CHAIN SUPPORT ===
+    ss.setdefault("selected_chain", "Base")      # === MULTI-CHAIN SUPPORT ===
+    ss.setdefault("selected_protocol", "Aura Finance")
     ss.setdefault("only_stables", True)
     ss.setdefault("pure_stables_only", False)
     # === FIX 1: Auto-refresh state ===
@@ -246,7 +255,7 @@ def _init_state() -> None:
 _init_state()
 
 
-# === MULTI-CHAIN SUPPORT === Callback: reset selected pool when chain switches
+# Callback: reset selected pool when chain or protocol switches
 def _reset_pool_on_chain_change() -> None:
     st.session_state["selected_pool_id"] = None
 
@@ -336,6 +345,24 @@ def _extract_tokens(symbol: str | None) -> list[str]:
     return tokens
 
 
+def build_aave_url(pool: dict[str, Any], chain: str) -> str:
+    """Construye la URL de Aave para un pool dado su underlyingToken y chain.
+
+    Args:
+        pool: Pool dict de DeFiLlama.
+        chain: Nombre de la chain (e.g. "Base", "Ethereum").
+
+    Returns:
+        URL de Aave reserve-overview o fallback a markets page.
+    """
+    market = AAVE_MARKET_NAMES.get(chain, "proto_mainnet_v3")
+    underlying = pool.get("underlyingTokens") or []
+    if underlying:
+        addr = underlying[0].lower()
+        return f"https://app.aave.com/reserve-overview/?underlyingAsset={addr}&marketName={market}"
+    return "https://app.aave.com/markets/"
+
+
 def classify_pool(pool: dict[str, Any]) -> str:
     """'Stable' | 'Semi-stable' | 'Volatile'."""
     symbol = pool.get("symbol") or ""
@@ -414,6 +441,7 @@ def pools_to_dataframe(pools: list[dict[str, Any]], chain_id: int = 8453, pid_ma
             "Type":          classify_pool(p),
             "URL":           url,
             "Stablecoin_Flag": bool(p.get("stablecoin", False)),
+            "Protocol":      "Aura",
         })
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -437,6 +465,46 @@ def fetch_aura_base_pools(chain: str = "Base") -> pd.DataFrame:
     logger.info("Filtrado a %d pools de Aura en %s", len(aura), chain)
     pid_map = fetch_aura_pid_map()
     return pools_to_dataframe(aura, chain_id=chain_id, pid_map=pid_map)  # === MULTI-CHAIN SUPPORT ===
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_aave_pools(chain: str = "Base") -> pd.DataFrame:
+    """Pipeline: descarga → filtra Aave/<chain> → tabula con URLs de Aave.
+
+    Args:
+        chain: Nombre de la chain (e.g. "Base", "Ethereum").
+
+    Returns:
+        DataFrame con columnas compatibles con pools_to_dataframe + Protocol="Aave".
+    """
+    all_pools = fetch_all_pools()
+    chain_lower = chain.lower()
+    aave = [
+        p for p in all_pools
+        if isinstance(p.get("project"), str)
+        and p["project"].lower().startswith("aave")
+        and isinstance(p.get("chain"), str)
+        and p["chain"].lower() == chain_lower
+    ]
+    logger.info("Filtrado a %d pools de Aave en %s", len(aave), chain)
+    rows: list[dict[str, Any]] = []
+    for p in aave:
+        rows.append({
+            "Symbol":          p.get("symbol"),
+            "TVL_USD":         p.get("tvlUsd"),
+            "APY_Total":       p.get("apy"),
+            "APY_Base":        p.get("apyBase"),
+            "APY_Reward":      p.get("apyReward"),
+            "Pool_ID":         p.get("pool"),
+            "Type":            classify_pool(p),
+            "URL":             build_aave_url(p, chain),
+            "Stablecoin_Flag": bool(p.get("stablecoin", False)),
+            "Protocol":        "Aave",
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("APY_Total", ascending=False, na_position="last").reset_index(drop=True)
+    return df
 
 
 # =========================================================================== #
@@ -564,7 +632,15 @@ with st.sidebar:
         options=list(CHAINS.keys()),
         key="selected_chain",
         on_change=_reset_pool_on_chain_change,
-        help="Selecciona la red de Aura Finance a monitorear.",
+        help="Selecciona la red a monitorear.",
+    )
+
+    st.radio(
+        "📡 Protocolo",
+        options=["Aura Finance", "Aave v3", "Ambos"],
+        key="selected_protocol",
+        on_change=_reset_pool_on_chain_change,
+        help="Filtra los pools por protocolo DeFi.",
     )
 
     st.number_input(
@@ -586,14 +662,25 @@ with st.sidebar:
     )
 
     st.divider()
-    st.markdown(  # === MULTI-CHAIN SUPPORT ===
-        f"🔗 [Aura Finance · {_chain_name}](https://app.aura.finance/#/{CHAINS[_chain_name]['id']})  \n"
-        "📊 [DeFiLlama Yields](https://defillama.com/yields)  \n"
+    _proto_sb = st.session_state.get("selected_protocol", "Aura Finance")
+    _chain_id_sb = CHAINS[_chain_name]["id"]
+    if _proto_sb == "Aura Finance":
+        _protocol_links = f"🟣 [Aura Finance · {_chain_name}](https://app.aura.finance/#/{_chain_id_sb})  \n"
+    elif _proto_sb == "Aave v3":
+        _protocol_links = f"👻 [Aave v3 · {_chain_name}](https://app.aave.com/markets/)  \n"
+    else:
+        _protocol_links = (
+            f"🟣 [Aura Finance · {_chain_name}](https://app.aura.finance/#/{_chain_id_sb})  \n"
+            "👻 [Aave v3](https://app.aave.com/markets/)  \n"
+        )
+    st.markdown(
+        _protocol_links
+        + "📊 [DeFiLlama Yields](https://defillama.com/yields)  \n"
         "🐦 [Twitter · Aura](https://twitter.com/AuraFinance)"
     )
     st.divider()
-    st.caption(  # === MULTI-CHAIN SUPPORT ===
-        f"Dashboard público de monitoreo para pools de stablecoins en Aura Finance "
+    st.caption(
+        f"Dashboard de monitoreo para pools de stablecoins en {_proto_sb} "
         f"(chain {_chain_name}). Datos vía DeFiLlama API · Cache 5 min.\n\n"
         "⚠️ *No es asesoramiento financiero.* APYs variables, riesgos de "
         "smart-contract, de-peg e impermanent loss."
@@ -604,10 +691,21 @@ with st.sidebar:
 # Data loading
 # =========================================================================== #
 
-# === MULTI-CHAIN SUPPORT === fetch_aura_base_pools already cached; chain param differentiates cache keys
+# fetch cached; chain + protocol params differentiate cache keys
+_active_protocol = st.session_state.get("selected_protocol", "Aura Finance")
 with st.spinner("📡 Cargando pools desde DeFiLlama..."):
     try:
-        df_all = fetch_aura_base_pools(chain=st.session_state.selected_chain)
+        _chain_sel = st.session_state.selected_chain
+        if _active_protocol == "Aura Finance":
+            df_all = fetch_aura_base_pools(chain=_chain_sel)
+        elif _active_protocol == "Aave v3":
+            df_all = fetch_aave_pools(chain=_chain_sel)
+        else:  # Ambos
+            _df_aura = fetch_aura_base_pools(chain=_chain_sel)
+            _df_aave = fetch_aave_pools(chain=_chain_sel)
+            df_all = pd.concat([_df_aura, _df_aave], ignore_index=True).sort_values(
+                "APY_Total", ascending=False, na_position="last"
+            ).reset_index(drop=True)
         load_error: str | None = None
     except Exception as exc:  # noqa: BLE001
         df_all = pd.DataFrame()
@@ -622,9 +720,9 @@ if load_error:
     )
     st.stop()
 
-if df_all.empty:  # === MULTI-CHAIN SUPPORT ===
+if df_all.empty:
     st.warning(
-        f"⚠️ No se encontraron pools de Aura en {st.session_state.selected_chain} en este momento. "
+        f"⚠️ No se encontraron pools de {_active_protocol} en {st.session_state.selected_chain} en este momento. "
         "Pulsá **🔄 Refresh Data** en el sidebar para reintentar."
     )
     st.stop()
@@ -905,22 +1003,31 @@ with tab_table:
         st.info("No hay pools que cumplan los filtros actuales.")
     else:
         # === FIX 2: Click-to-select — on_select actualiza selected_pool_id ===
+        _show_protocol_col = st.session_state.get("selected_protocol", "Aura Finance") == "Ambos"
+        _table_cols = (
+            ["Symbol", "Protocol", "Type", "TVL_USD", "APY_Total", "APY_Base",
+             "APY_Reward", "Retorno mensual est.", "Pool_ID", "URL"]
+            if _show_protocol_col else
+            ["Symbol", "Type", "TVL_USD", "APY_Total", "APY_Base",
+             "APY_Reward", "Retorno mensual est.", "Pool_ID", "URL"]
+        )
+        _col_config: dict = {
+            "Symbol":               st.column_config.TextColumn("Symbol",                width="medium"),
+            "Protocol":             st.column_config.TextColumn("Protocolo",             width="small"),
+            "Type":                 st.column_config.TextColumn("Tipo",                  width="small"),
+            "TVL_USD":              st.column_config.NumberColumn("TVL",                 format="$%,.0f"),
+            "APY_Total":            st.column_config.NumberColumn("APY Total",           format="%.2f%%"),
+            "APY_Base":             st.column_config.NumberColumn("APY Base",            format="%.2f%%"),
+            "APY_Reward":           st.column_config.NumberColumn("APY Reward",          format="%.2f%%"),
+            "Retorno mensual est.": st.column_config.NumberColumn("Retorno mensual est.",format="$%.2f"),
+            "Pool_ID":              st.column_config.TextColumn("Pool ID",               width="medium"),
+            "URL":                  st.column_config.LinkColumn("Link",                  display_text="↗"),
+        }
         sel = st.dataframe(
-            df_table[["Symbol", "Type", "TVL_USD", "APY_Total", "APY_Base",
-                      "APY_Reward", "Retorno mensual est.", "Pool_ID", "URL"]],
+            df_table[_table_cols],
             use_container_width=True,
             height=560,
-            column_config={
-                "Symbol":               st.column_config.TextColumn("Symbol",                width="medium"),
-                "Type":                 st.column_config.TextColumn("Tipo",                  width="small"),
-                "TVL_USD":              st.column_config.NumberColumn("TVL",                 format="$%,.0f"),
-                "APY_Total":            st.column_config.NumberColumn("APY Total",           format="%.2f%%"),
-                "APY_Base":             st.column_config.NumberColumn("APY Base",            format="%.2f%%"),
-                "APY_Reward":           st.column_config.NumberColumn("APY Reward",          format="%.2f%%"),
-                "Retorno mensual est.": st.column_config.NumberColumn("Retorno mensual est.",format="$%.2f"),
-                "Pool_ID":              st.column_config.TextColumn("Pool ID",               width="medium"),
-                "URL":                  st.column_config.LinkColumn("Link",                  display_text="↗"),
-            },
+            column_config=_col_config,
             hide_index=True,
             on_select="rerun",
             selection_mode="single-row",
